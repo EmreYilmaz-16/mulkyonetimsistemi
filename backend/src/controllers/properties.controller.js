@@ -8,6 +8,22 @@ const {
   recordOrganizationAuditEvent
 } = require('../utils/organization');
 
+const normalizeNullableInteger = (value) => {
+  if (value === '' || value === null || value === undefined) {
+    return null;
+  }
+
+  return Number(value);
+};
+
+const normalizeNullableNumber = (value) => {
+  if (value === '' || value === null || value === undefined) {
+    return null;
+  }
+
+  return Number(value);
+};
+
 const list = async (req, res, next) => {
   try {
     const organizationId = req.organizationId || req.organization?.id;
@@ -93,9 +109,9 @@ const create = async (req, res, next) => {
       `INSERT INTO properties (organization_id, building_id, name, site_name, type, floor, unit_number, area_sqm,
         deed_info, description, purchase_price, market_value, city_id, district_id, neighborhood)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-      [organizationId, building_id || null, name, site_name || null, type || 'residential', floor || null,
-       unit_number || null, area_sqm || null, deed_info || null,
-       description || null, purchase_price || null, market_value || null,
+      [organizationId, building_id || null, name, site_name || null, type || 'residential', normalizeNullableInteger(floor),
+       unit_number || null, normalizeNullableNumber(area_sqm), deed_info || null,
+       description || null, normalizeNullableNumber(purchase_price), normalizeNullableNumber(market_value),
        city_id || null, district_id || null, neighborhood || null]
     );
 
@@ -147,8 +163,8 @@ const update = async (req, res, next) => {
         district_id = $15,
         neighborhood = $16
        WHERE id = $13 AND organization_id = $17 RETURNING *`,
-      [building_id, name, site_name || null, type, floor, unit_number, area_sqm,
-       deed_info, description, status, purchase_price, market_value, req.params.id,
+        [building_id, name, site_name || null, type, normalizeNullableInteger(floor), unit_number, normalizeNullableNumber(area_sqm),
+         deed_info, description, status, normalizeNullableNumber(purchase_price), normalizeNullableNumber(market_value), req.params.id,
        city_id || null, district_id || null, neighborhood || null, organizationId]
     );
     if (!rows.length) return res.status(404).json({ success: false, message: 'Mülk bulunamadı' });
