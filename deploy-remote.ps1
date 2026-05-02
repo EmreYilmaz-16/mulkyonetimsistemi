@@ -119,7 +119,7 @@ docker compose up -d --build
 git status --short
 '@
 
-$remoteScript = $remoteScriptTemplate.Replace('__REMOTE_PATH__', $RemotePath).Replace('__BRANCH__', $Branch).Replace('__PRESERVE_FILES__', $preserveFilesShell)
+$remoteScript = $remoteScriptTemplate.Replace('__REMOTE_PATH__', $RemotePath).Replace('__BRANCH__', $Branch).Replace('__PRESERVE_FILES__', $preserveFilesShell).Replace("`r`n", "`n")
 
 Invoke-Step -Description 'Pull and rebuild on the remote server' -Action {
     $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remoteScript))
