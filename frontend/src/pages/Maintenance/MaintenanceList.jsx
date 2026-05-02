@@ -13,6 +13,8 @@ export default function MaintenanceList() {
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
+  const [completingId, setCompletingId] = useState(null);
+  const [completionCost, setCompletionCost] = useState('');
 
   const { data: properties } = useQuery({
     queryKey: ['properties-select'],
@@ -32,9 +34,22 @@ export default function MaintenanceList() {
   });
 
   const updateStatus = useMutation({
-    mutationFn: ({ id, status }) => api.put(`/maintenance/${id}`, { status }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['maintenance'] })
+    mutationFn: ({ id, status, cost }) => api.put(`/maintenance/${id}`, { status, cost }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['maintenance'] });
+      qc.invalidateQueries({ queryKey: ['expenses'] });
+      setCompletingId(null);
+      setCompletionCost('');
+    }
   });
+
+  const submitCompletion = (id) => {
+    updateStatus.mutate({
+      id,
+      status: 'completed',
+      cost: completionCost === '' ? undefined : completionCost
+    });
+  };
 
   return (
     <div className="space-y-3">
@@ -94,6 +109,7 @@ export default function MaintenanceList() {
                 <div className="flex-1 min-w-0">
                   <div className="font-semibold text-sm">{m.title}</div>
                   <div className="text-xs text-gray-500">{m.property_name}</div>
+                  {m.cost ? <div className="text-xs text-gray-500 mt-1">Bakım tutarı: ₺{Number(m.cost).toLocaleString('tr-TR')}</div> : null}
                 </div>
                 <div className="flex gap-1 shrink-0">
                   <span className={`badge ${priorityColor[m.priority]}`}>{priorityLabel[m.priority]}</span>
@@ -107,16 +123,46 @@ export default function MaintenanceList() {
                     className="text-xs btn-secondary py-1 px-2"
                   >İşleme Al</button>
                   <button
-                    onClick={() => updateStatus.mutate({ id: m.id, status: 'completed' })}
+                    onClick={() => { setCompletingId(m.id); setCompletionCost(m.cost || ''); }}
                     className="text-xs btn-primary py-1 px-2"
                   >Tamamla</button>
                 </div>
               )}
               {m.status === 'in_progress' && (
                 <button
-                  onClick={() => updateStatus.mutate({ id: m.id, status: 'completed' })}
+                  onClick={() => { setCompletingId(m.id); setCompletionCost(m.cost || ''); }}
                   className="text-xs btn-primary py-1 px-2"
                 >Tamamla</button>
+              )}
+              {completingId === m.id && (
+                <div className="rounded-lg border border-green-200 bg-green-50 p-3 space-y-2">
+                  <div>
+                    <label className="label">Bakım Tutarı (₺)</label>
+                    <input
+                      className="input"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={completionCost}
+                      onChange={(e) => setCompletionCost(e.target.value)}
+                      placeholder="Örn: 2500"
+                    />
+                    <div className="text-xs text-gray-500 mt-1">Tutar girilirse bakım tamamlandığında otomatik gider kaydı oluşturulur.</div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => submitCompletion(m.id)}
+                      disabled={updateStatus.isPending}
+                      className="text-xs btn-primary py-1 px-2"
+                    >{updateStatus.isPending ? 'Kaydediliyor...' : 'Tamamlandı Olarak Kaydet'}</button>
+                    <button
+                      type="button"
+                      onClick={() => { setCompletingId(null); setCompletionCost(''); }}
+                      className="text-xs btn-secondary py-1 px-2"
+                    >Vazgeç</button>
+                  </div>
+                </div>
               )}
             </div>
           ))}

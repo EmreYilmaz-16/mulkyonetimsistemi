@@ -1,9 +1,105 @@
-const { query } = require('../config/database');
+const { query, getClient } = require('../config/database');
 const { AUDIT_EVENT_TYPES } = require('../utils/organizationAudit');
 const {
   ensureEntitiesBelongToOrganization,
   recordOrganizationAuditEvent
 } = require('../utils/organization');
+
+const buildMaintenanceExpenseDescription = (maintenanceRow) => `Bakim gideri — ${maintenanceRow.title} #${maintenanceRow.id.slice(0, 8)}`;
+
+const normalizeNullableNumber = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : value;
+};
+
+const syncMaintenanceExpense = async ({ client, organizationId, maintenanceRow, actorUserId, db }) => {
+  const amount = Number(maintenanceRow.cost) || 0;
+  const description = buildMaintenanceExpenseDescription(maintenanceRow);
+  const effectiveDate = maintenanceRow.completed_at
+    ? new Date(maintenanceRow.completed_at).toISOString().split('T')[0]
+    : new Date().toISOString().split('T')[0];
+  const shouldExist = maintenanceRow.status === 'completed' && amount > 0;
+
+  const { rows: existingRows } = await client.query(
+    `SELECT * FROM expenses
+     WHERE organization_id = $1 AND description = $2
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [organizationId, description]
+  );
+
+  const existingExpense = existingRows[0];
+
+  if (!shouldExist) {
+    if (existingExpense) {
+      await client.query(
+        'DELETE FROM expenses WHERE id = $1 AND organization_id = $2',
+        [existingExpense.id, organizationId]
+      );
+
+      await recordOrganizationAuditEvent({
+        organizationId,
+        actorUserId,
+        eventType: AUDIT_EVENT_TYPES.EXPENSE_DELETED,
+        entityType: 'expense',
+        entityId: existingExpense.id,
+        title: 'maintenance',
+        description: 'Bakim gider kaydi kaldirildi',
+        metadata: { amount: existingExpense.amount, property_id: existingExpense.property_id, source: 'maintenance_request', maintenance_request_id: maintenanceRow.id },
+        db
+      });
+    }
+    return;
+  }
+
+  if (existingExpense) {
+    await client.query(
+      `UPDATE expenses SET
+         property_id = $1,
+         category = 'maintenance',
+         amount = $2,
+         date = $3,
+         description = $4,
+         updated_at = NOW()
+       WHERE id = $5 AND organization_id = $6`,
+      [maintenanceRow.property_id, amount, effectiveDate, description, existingExpense.id, organizationId]
+    );
+
+    await recordOrganizationAuditEvent({
+      organizationId,
+      actorUserId,
+      eventType: AUDIT_EVENT_TYPES.EXPENSE_UPDATED,
+      entityType: 'expense',
+      entityId: existingExpense.id,
+      title: 'maintenance',
+      description: `Bakim gideri guncellendi • Tutar: ${amount}`,
+      metadata: { amount, property_id: maintenanceRow.property_id, source: 'maintenance_request', maintenance_request_id: maintenanceRow.id },
+      db
+    });
+    return;
+  }
+
+  const { rows: expenseRows } = await client.query(
+    `INSERT INTO expenses (organization_id, property_id, category, amount, date, description)
+     VALUES ($1, $2, 'maintenance', $3, $4, $5)
+     RETURNING *`,
+    [organizationId, maintenanceRow.property_id, amount, effectiveDate, description]
+  );
+
+  await recordOrganizationAuditEvent({
+    organizationId,
+    actorUserId,
+    eventType: AUDIT_EVENT_TYPES.EXPENSE_CREATED,
+    entityType: 'expense',
+    entityId: expenseRows[0].id,
+    title: 'maintenance',
+    description: `Bakim gideri eklendi • Tutar: ${amount}`,
+    metadata: { amount, property_id: maintenanceRow.property_id, source: 'maintenance_request', maintenance_request_id: maintenanceRow.id },
+    db
+  });
+};
 
 const list = async (req, res, next) => {
   try {
@@ -82,25 +178,57 @@ const create = async (req, res, next) => {
 };
 
 const update = async (req, res, next) => {
+  const client = await getClient();
   try {
     const organizationId = req.organizationId;
     const { status, priority, assigned_to, cost, description } = req.body;
-    const completedAt = status === 'completed' ? 'NOW()' : 'completed_at';
-    const { rows } = await query(
+    const normalizedCost = normalizeNullableNumber(cost);
+    const db = client.query.bind(client);
+
+    await client.query('BEGIN');
+
+    const { rows: existingRows } = await client.query(
+      `SELECT * FROM maintenance_requests
+       WHERE id = $1 AND organization_id = $2
+       LIMIT 1`,
+      [req.params.id, organizationId]
+    );
+
+    if (!existingRows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Talep bulunamadı' });
+    }
+
+    const { rows } = await client.query(
       `UPDATE maintenance_requests SET
         status = COALESCE($1, status),
         priority = COALESCE($2, priority),
         assigned_to = COALESCE($3, assigned_to),
-        cost = COALESCE($4, cost),
+        cost = CASE WHEN $4::numeric IS NULL THEN cost ELSE $4 END,
         description = COALESCE($5, description),
         completed_at = CASE WHEN $1 = 'completed' THEN NOW() ELSE completed_at END
        WHERE id = $6 AND organization_id = $7 RETURNING *`,
-      [status, priority, assigned_to, cost, description, req.params.id, organizationId]
+      [status, priority, assigned_to, normalizedCost, description, req.params.id, organizationId]
     );
-    if (!rows.length) return res.status(404).json({ success: false, message: 'Talep bulunamadı' });
-    await recordOrganizationAuditEvent({ organizationId, actorUserId: req.user?.id || null, eventType: AUDIT_EVENT_TYPES.MAINTENANCE_UPDATED, entityType: 'maintenance', entityId: rows[0].id, title: rows[0].title, description: `Bakim talebi guncellendi • Durum: ${rows[0].status}`, metadata: { status: rows[0].status, priority: rows[0].priority } });
+
+    await syncMaintenanceExpense({
+      client,
+      organizationId,
+      maintenanceRow: rows[0],
+      actorUserId: req.user?.id || null,
+      db
+    });
+
+    await recordOrganizationAuditEvent({ organizationId, actorUserId: req.user?.id || null, eventType: AUDIT_EVENT_TYPES.MAINTENANCE_UPDATED, entityType: 'maintenance', entityId: rows[0].id, title: rows[0].title, description: `Bakim talebi guncellendi • Durum: ${rows[0].status}`, metadata: { status: rows[0].status, priority: rows[0].priority, cost: rows[0].cost }, db });
+
+    await client.query('COMMIT');
     res.json({ success: true, data: rows[0] });
-  } catch (err) { next(err); }
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
 };
 
 module.exports = { list, get, create, update };
