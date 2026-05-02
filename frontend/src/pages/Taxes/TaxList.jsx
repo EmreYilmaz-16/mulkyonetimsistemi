@@ -51,12 +51,12 @@ export default function TaxList() {
 
   const addMutation = useMutation({
     mutationFn: (d) => api.post('/taxes', d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['taxes'] }); setShowForm(false); reset(); }
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['taxes'] }); qc.invalidateQueries({ queryKey: ['expenses'] }); setShowForm(false); reset(); }
   });
 
   const markPaid = useMutation({
     mutationFn: ({ id, paid_date }) => api.put(`/taxes/${id}`, { status: 'odendi', paid_date }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['taxes'] })
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['taxes'] }); qc.invalidateQueries({ queryKey: ['expenses'] }); }
   });
 
   const deleteMutation = useMutation({
