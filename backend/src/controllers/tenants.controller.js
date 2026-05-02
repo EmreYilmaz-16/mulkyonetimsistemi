@@ -6,6 +6,14 @@ const {
   recordOrganizationAuditEvent
 } = require('../utils/organization');
 
+const normalizeNullableInteger = (value) => {
+  if (value === '' || value === null || value === undefined) {
+    return null;
+  }
+
+  return Number(value);
+};
+
 const list = async (req, res, next) => {
   try {
     const organizationId = req.organizationId;
@@ -71,7 +79,7 @@ const create = async (req, res, next) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [organizationId, first_name, last_name, tc_no || null, phone, email || null,
        emergency_contact || null, emergency_phone || null,
-       findeks_score || null, notes || null]
+       normalizeNullableInteger(findeks_score), notes || null]
     );
     await recordOrganizationAuditEvent({
       organizationId,
@@ -106,7 +114,7 @@ const update = async (req, res, next) => {
         is_active = COALESCE($10, is_active)
        WHERE id = $11 AND organization_id = $12 RETURNING *`,
       [first_name, last_name, tc_no, phone, email,
-       emergency_contact, emergency_phone, findeks_score, notes, is_active, req.params.id, organizationId]
+         emergency_contact, emergency_phone, normalizeNullableInteger(findeks_score), notes, is_active, req.params.id, organizationId]
     );
     if (!rows.length) return res.status(404).json({ success: false, message: 'Kiracı bulunamadı' });
     await recordOrganizationAuditEvent({
