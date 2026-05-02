@@ -1,0 +1,100 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: kiraTakip_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kiratakip}
+      POSTGRES_USER: ${POSTGRES_USER:-kiratakip}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kiratakip123}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    # DB portu dışarıya açılmıyor — sadece iç ağdan erişilir
+    # Test için açmak isterseniz: "5432:5432" yorumunu kaldır
+    # ports:
+    #   - "5432:5432"
+    networks:
+      - kiratakip_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kiratakip}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    image: postgres:16-alpine
+    container_name: kiraTakip_migrate
+    restart: "no"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kiratakip}
+      POSTGRES_USER: ${POSTGRES_USER:-kiratakip}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kiratakip123}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-kiratakip123}
+      DB_HOST: db
+    volumes:
+      - ./db/migrations:/migrations:ro
+      - ./db/migrate.sh:/migrate.sh:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "/migrate.sh"]
+    networks:
+      - kiratakip_net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: kiraTakip_api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-kiratakip}:${POSTGRES_PASSWORD:-kiratakip123}@db:5432/${POSTGRES_DB:-kiratakip}
+      JWT_SECRET: ${JWT_SECRET:-change_this_secret_in_production}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+    ports:
+      - "18300:3000"   # Direkt API erişimi (Postman / Android test)
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - kiratakip_net
+    volumes:
+      - uploads_data:/app/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api/v1
+    container_name: kiraTakip_web
+    restart: unless-stopped
+    networks:
+      - kiratakip_net
+
+  nginx:
+    image: nginx:alpine
+    container_name: kiraTakip_nginx
+    restart: unless-stopped
+    ports:
+      - "19080:80"
+      - "19443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - kiratakip_net
+
+volumes:
+  postgres_data:
+  uploads_data:
+
+networks:
+  kiratakip_net:
+    driver: bridge
