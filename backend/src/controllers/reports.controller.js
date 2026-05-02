@@ -1,5 +1,18 @@
 const { query } = require('../config/database');
 
+const normalizeYear = (value) => {
+  const year = Number(value);
+  return Number.isInteger(year) && year >= 2000 && year <= 2100
+    ? year
+    : new Date().getFullYear();
+};
+
+const normalizeMonth = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const month = Number(value);
+  return Number.isInteger(month) && month >= 1 && month <= 12 ? month : null;
+};
+
 const dashboard = async (req, res, next) => {
   try {
     const organizationId = req.organizationId;
@@ -116,7 +129,8 @@ const incomeExpense = async (req, res, next) => {
 const propertyProfitability = async (req, res, next) => {
   try {
     const organizationId = req.organizationId;
-    const { year = new Date().getFullYear(), site_name } = req.query;
+    const year = normalizeYear(req.query.year);
+    const { site_name } = req.query;
     const conditions = [`p.organization_id = $2`];
     const params = [year, organizationId];
 
@@ -160,4 +174,89 @@ const propertyProfitability = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { dashboard, incomeExpense, propertyProfitability };
+const propertyProfitabilityDetail = async (req, res, next) => {
+  try {
+    const organizationId = req.organizationId;
+    const propertyId = req.params.propertyId;
+    const year = normalizeYear(req.query.year);
+    const month = normalizeMonth(req.query.month);
+
+    const { rows: propertyRows } = await query(
+      `SELECT id, name, site_name, unit_number
+       FROM properties
+       WHERE id = $1 AND organization_id = $2
+       LIMIT 1`,
+      [propertyId, organizationId]
+    );
+
+    if (!propertyRows.length) {
+      return res.status(404).json({ success: false, message: 'Mülk bulunamadı' });
+    }
+
+    const monthConditionIncome = month ? 'AND EXTRACT(MONTH FROM py.payment_date) = $4' : '';
+    const monthConditionExpense = month ? 'AND EXTRACT(MONTH FROM e.date) = $4' : '';
+    const params = month
+      ? [propertyId, organizationId, year, month]
+      : [propertyId, organizationId, year];
+
+    const [incomeRows, expenseRows] = await Promise.all([
+      query(
+        `SELECT py.id,
+                py.amount,
+                py.payment_date AS date,
+                py.payment_type,
+                py.method,
+                py.reference_no,
+                py.notes,
+                c.id AS contract_id,
+                t.first_name || ' ' || t.last_name AS tenant_name
+         FROM payments py
+         JOIN contracts c ON c.id = py.contract_id
+         LEFT JOIN tenants t ON t.id = c.tenant_id
+         WHERE c.property_id = $1
+           AND py.organization_id = $2
+           AND py.status = 'paid'
+           AND EXTRACT(YEAR FROM py.payment_date) = $3
+           ${monthConditionIncome}
+         ORDER BY py.payment_date DESC, py.created_at DESC`,
+        params
+      ),
+      query(
+        `SELECT e.id,
+                e.amount,
+                e.date,
+                e.category,
+                e.vendor,
+                e.description,
+                e.receipt_url
+         FROM expenses e
+         WHERE e.property_id = $1
+           AND e.organization_id = $2
+           AND EXTRACT(YEAR FROM e.date) = $3
+           ${monthConditionExpense}
+         ORDER BY e.date DESC, e.created_at DESC`,
+        params
+      )
+    ]);
+
+    const totalIncome = incomeRows.rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const totalExpenses = expenseRows.rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+
+    res.json({
+      success: true,
+      data: {
+        property: propertyRows[0],
+        summary: {
+          income: totalIncome,
+          expenses: totalExpenses,
+          net: totalIncome - totalExpenses
+        },
+        filters: { year, month },
+        income_details: incomeRows.rows,
+        expense_details: expenseRows.rows
+      }
+    });
+  } catch (err) { next(err); }
+};
+
+module.exports = { dashboard, incomeExpense, propertyProfitability, propertyProfitabilityDetail };

@@ -8,5 +8,6 @@ router.use(requireOrganizationContext());
 router.get('/dashboard', ctrl.dashboard);
 router.get('/income-expense', ctrl.incomeExpense);
 router.get('/profitability', ctrl.propertyProfitability);
+router.get('/profitability/:propertyId', ctrl.propertyProfitabilityDetail);
 
 module.exports = router;
