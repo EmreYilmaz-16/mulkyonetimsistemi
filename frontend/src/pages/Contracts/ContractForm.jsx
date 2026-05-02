@@ -130,6 +130,7 @@ export default function ContractForm() {
           <div>
             <label className="label">Depozito (₺)</label>
             <input className="input" type="number" step="0.01" {...register('deposit_amount')} />
+            <p className="mt-1 text-xs text-gray-500">Depozito girilirse sözleşme kaydında ayrı bir depozito tahakkuku oluşur ve Tahakkuklar ekranından tahsil edilir.</p>
           </div>
         </div>
 

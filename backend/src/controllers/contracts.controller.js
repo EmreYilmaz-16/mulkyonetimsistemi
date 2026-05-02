@@ -6,6 +6,88 @@ const {
   recordOrganizationAuditEvent
 } = require('../utils/organization');
 
+const PAYMENT_TYPES = Object.freeze({
+  RENT: 'rent',
+  DEPOSIT: 'deposit'
+});
+
+const normalizeNullableNumber = (value) => {
+  if (value === '' || value === null || value === undefined) {
+    return null;
+  }
+
+  return Number(value);
+};
+
+const normalizeNullableInteger = (value) => {
+  if (value === '' || value === null || value === undefined) {
+    return null;
+  }
+
+  return Number(value);
+};
+
+const upsertDepositAccrual = async ({ client, organizationId, contractId, depositAmount, dueDate, actorUserId, db }) => {
+  const normalizedDepositAmount = Number(depositAmount) || 0;
+
+  const { rows: existingRows } = await client.query(
+    `SELECT id, status
+     FROM payments
+     WHERE contract_id = $1 AND organization_id = $2 AND payment_type = $3
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    [contractId, organizationId, PAYMENT_TYPES.DEPOSIT]
+  );
+
+  const existing = existingRows[0];
+
+  if (normalizedDepositAmount <= 0) {
+    if (existing && ['pending', 'late', 'partial'].includes(existing.status)) {
+      await client.query(
+        `UPDATE payments
+         SET status = 'cancelled', updated_at = NOW()
+         WHERE id = $1 AND organization_id = $2`,
+        [existing.id, organizationId]
+      );
+    }
+    return;
+  }
+
+  if (existing) {
+    if (['pending', 'late', 'partial'].includes(existing.status)) {
+      await client.query(
+        `UPDATE payments
+         SET amount = $1,
+             due_date = $2,
+             notes = $3,
+             updated_at = NOW()
+         WHERE id = $4 AND organization_id = $5`,
+        [normalizedDepositAmount, dueDate, 'Depozito tahakkuku', existing.id, organizationId]
+      );
+    }
+    return;
+  }
+
+  const { rows: paymentRows } = await client.query(
+    `INSERT INTO payments (organization_id, contract_id, payment_type, amount, due_date, status, notes)
+     VALUES ($1, $2, $3, $4, $5, 'pending', $6)
+     RETURNING *`,
+    [organizationId, contractId, PAYMENT_TYPES.DEPOSIT, normalizedDepositAmount, dueDate, 'Depozito tahakkuku']
+  );
+
+  await recordOrganizationAuditEvent({
+    organizationId,
+    actorUserId,
+    eventType: AUDIT_EVENT_TYPES.PAYMENT_RECORDED,
+    entityType: 'payment',
+    entityId: paymentRows[0].id,
+    title: `Depozito tahakkuku #${contractId.slice(0, 8)}`,
+    description: `Tutar: ${paymentRows[0].amount} • Vade: ${dueDate}`,
+    metadata: { amount: paymentRows[0].amount, contract_id: contractId, payment_type: PAYMENT_TYPES.DEPOSIT, generated: true },
+    db
+  });
+};
+
 const list = async (req, res, next) => {
   try {
     const organizationId = req.organizationId;
@@ -81,6 +163,8 @@ const create = async (req, res, next) => {
     const { property_id, tenant_id, start_date, end_date, monthly_rent,
             deposit_amount, increase_type, increase_rate, special_terms, eviction_date,
             payment_day } = req.body;
+    const safeDepositAmount = Math.max(0, normalizeNullableNumber(deposit_amount) || 0);
+    const safePaymentDay = normalizeNullableInteger(payment_day) || 1;
 
     // Çakışan aktif sözleşme kontrolü
     const conflict = await client.query(
@@ -108,9 +192,19 @@ const create = async (req, res, next) => {
         deposit_amount, increase_type, increase_rate, special_terms, eviction_date, payment_day)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [organizationId, property_id, tenant_id, start_date, end_date, monthly_rent,
-       deposit_amount || 0, increase_type || 'tüfe', increase_rate || null,
-       special_terms || null, eviction_date || null, payment_day || 1]
+       safeDepositAmount, increase_type || 'tüfe', increase_rate || null,
+       special_terms || null, eviction_date || null, safePaymentDay]
     );
+
+    await upsertDepositAccrual({
+      client,
+      organizationId,
+      contractId: rows[0].id,
+      depositAmount: rows[0].deposit_amount,
+      dueDate: rows[0].start_date,
+      actorUserId: req.user?.id || null,
+      db
+    });
 
     // Mülk durumunu "rented" yap
     await client.query(`UPDATE properties SET status = 'rented' WHERE id = $1 AND organization_id = $2`, [property_id, organizationId]);
@@ -139,11 +233,16 @@ const create = async (req, res, next) => {
 };
 
 const update = async (req, res, next) => {
+  const client = await getClient();
   try {
     const organizationId = req.organizationId;
+    const db = client.query.bind(client);
     const { end_date, monthly_rent, deposit_amount, increase_type,
             increase_rate, special_terms, eviction_date, status, payment_day } = req.body;
-    const { rows } = await query(
+    await client.query('BEGIN');
+    const normalizedDepositAmount = normalizeNullableNumber(deposit_amount);
+    const normalizedPaymentDay = normalizeNullableInteger(payment_day);
+    const { rows } = await client.query(
       `UPDATE contracts SET
         end_date = COALESCE($1, end_date),
         monthly_rent = COALESCE($2, monthly_rent),
@@ -155,10 +254,26 @@ const update = async (req, res, next) => {
         status = COALESCE($8, status),
         payment_day = COALESCE($9, payment_day)
        WHERE id = $10 AND organization_id = $11 RETURNING *`,
-      [end_date, monthly_rent, deposit_amount, increase_type,
-       increase_rate, special_terms, eviction_date, status, payment_day || null, req.params.id, organizationId]
+      [end_date, monthly_rent, normalizedDepositAmount, increase_type,
+       increase_rate, special_terms, eviction_date, status, normalizedPaymentDay, req.params.id, organizationId]
     );
-    if (!rows.length) return res.status(404).json({ success: false, message: 'Sözleşme bulunamadı' });
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Sözleşme bulunamadı' });
+    }
+
+    if (normalizedDepositAmount !== null) {
+      await upsertDepositAccrual({
+        client,
+        organizationId,
+        contractId: rows[0].id,
+        depositAmount: rows[0].deposit_amount,
+        dueDate: rows[0].start_date,
+        actorUserId: req.user?.id || null,
+        db
+      });
+    }
+
     await recordOrganizationAuditEvent({
       organizationId,
       actorUserId: req.user?.id || null,
@@ -167,13 +282,21 @@ const update = async (req, res, next) => {
       entityId: rows[0].id,
       title: `Sozlesme #${rows[0].id.slice(0, 8)}`,
       description: 'Sozlesme guncellendi',
-      metadata: { status: rows[0].status, monthly_rent: rows[0].monthly_rent }
+      metadata: { status: rows[0].status, monthly_rent: rows[0].monthly_rent },
+      db
     });
+
+    await client.query('COMMIT');
     res.json({ success: true, data: rows[0] });
-  } catch (err) { next(err); }
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
 };
 
-// Sözleşmeyi sonlandır: status güncelle + mülkü "available" yap + depozito mahsubu gelir kaydı
+// Sözleşmeyi sonlandır: status güncelle + mülkü "available" yap + depozito iadesini gider kaydet
 const terminate = async (req, res, next) => {
   const client = await getClient();
   try {
@@ -204,10 +327,19 @@ const terminate = async (req, res, next) => {
     }
 
     const depositAmount  = Number(existing[0].deposit_amount) || 0;
-    // deposit_return_amount null gelirse tam iade varsayılır
-    const returnAmount   = deposit_return_amount !== null ? Number(deposit_return_amount) : depositAmount;
-    const damageAmount   = Math.max(0, depositAmount - returnAmount);
+    const normalizedReturnAmount = deposit_return_amount === '' || deposit_return_amount === undefined
+      ? null
+      : normalizeNullableNumber(deposit_return_amount);
+    if (normalizedReturnAmount !== null && (normalizedReturnAmount < 0 || normalizedReturnAmount > depositAmount)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Depozito iade tutari gecersiz' });
+    }
+
+    const returnAmount   = normalizedReturnAmount !== null ? normalizedReturnAmount : depositAmount;
     const depositReturned = returnAmount >= depositAmount;
+    const effectiveReturnDate = returnAmount > 0
+      ? (safeReturnDate || new Date().toISOString().split('T')[0])
+      : null;
 
     // Sözleşmeyi güncelle
     const { rows } = await client.query(
@@ -219,29 +351,27 @@ const terminate = async (req, res, next) => {
          termination_notes = $5,
          updated_at = NOW()
        WHERE id = $6 AND organization_id = $7 RETURNING *`,
-      [termination_type, depositReturned, safeReturnDate, returnAmount, safeNotes, req.params.id, organizationId]
+      [termination_type, depositReturned, effectiveReturnDate, returnAmount, safeNotes, req.params.id, organizationId]
     );
 
-    // Hasar tazminatı varsa → ödeme tablosuna gelir kaydı düş (zaten tahsil edildi)
-    if (damageAmount > 0) {
-      const today = new Date().toISOString().split('T')[0];
+    if (returnAmount > 0) {
       await client.query(
-        `INSERT INTO payments (organization_id, contract_id, amount, due_date, payment_date, status, notes)
-         VALUES ($1, $2, $3, $4, $4, 'paid', $5)`,
-        [organizationId, req.params.id, damageAmount, today,
-         `Depozito mahsubu — hasar/eksiklik tazminatı (toplam depozito: ₺${depositAmount}, iade: ₺${returnAmount})`]
+        `INSERT INTO expenses (organization_id, property_id, category, amount, date, description)
+         VALUES ($1, $2, 'other', $3, $4, $5)`,
+        [organizationId, existing[0].property_id, returnAmount, effectiveReturnDate,
+         `Depozito iadesi — sözleşme #${req.params.id.slice(0, 8)}`]
       );
 
       await recordOrganizationAuditEvent({
         organizationId,
         actorUserId: req.user?.id || null,
-        eventType: AUDIT_EVENT_TYPES.PAYMENT_RECORDED,
-        entityType: 'payment',
+        eventType: AUDIT_EVENT_TYPES.EXPENSE_CREATED,
+        entityType: 'expense',
         entityId: null,
-        title: `Hasar tahsilati #${req.params.id.slice(0, 8)}`,
-        description: `Depozito mahsup tutari: ${damageAmount}`,
-        metadata: { amount: damageAmount, contract_id: req.params.id, auto_generated: true },
-        occurredAt: today,
+        title: `Depozito iadesi #${req.params.id.slice(0, 8)}`,
+        description: `Iade tutari: ${returnAmount}`,
+        metadata: { amount: returnAmount, contract_id: req.params.id, auto_generated: true },
+        occurredAt: effectiveReturnDate,
         db
       });
     }
@@ -260,7 +390,7 @@ const terminate = async (req, res, next) => {
       entityId: rows[0].id,
       title: `Sozlesme #${rows[0].id.slice(0, 8)}`,
       description: 'Sozlesme sonlandirildi',
-      metadata: { termination_type, damage_amount: damageAmount },
+      metadata: { termination_type, deposit_return_amount: returnAmount, deposit_retained_amount: Math.max(0, depositAmount - returnAmount) },
       db
     });
 
@@ -268,9 +398,8 @@ const terminate = async (req, res, next) => {
     res.json({
       success: true,
       data: rows[0],
-      damage_amount: damageAmount,
-      message: damageAmount > 0
-        ? `Sözleşme sonlandırıldı. ₺${damageAmount.toLocaleString('tr-TR')} hasar tazminatı gelir olarak kaydedildi.`
+      message: returnAmount > 0
+        ? `Sözleşme sonlandırıldı. ₺${returnAmount.toLocaleString('tr-TR')} depozito iadesi gider olarak kaydedildi.`
         : 'Sözleşme sonlandırıldı.'
     });
   } catch (err) {

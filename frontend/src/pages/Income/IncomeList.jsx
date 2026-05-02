@@ -3,12 +3,16 @@ import { useState, useMemo } from 'react';
 import { TrendingUp } from 'lucide-react';
 import api from '../../api/client';
 
-const typeLabel  = { rent: 'Kira', deposit: 'Depozito Mahsubu' };
+const typeLabel  = { rent: 'Kira', deposit: 'Depozito' };
 const typeBadge  = { rent: 'bg-green-100 text-green-700', deposit: 'bg-orange-100 text-orange-700' };
 const methodLabel = { cash: 'Nakit', bank: 'Banka', card: 'Kart', eft: 'EFT', other: 'Diğer' };
 
 function getType(payment) {
-  return payment.notes && payment.notes.startsWith('Depozito mahsubu') ? 'deposit' : 'rent';
+  if (payment.payment_type) {
+    return payment.payment_type;
+  }
+
+  return payment.notes && payment.notes.startsWith('Depozito') ? 'deposit' : 'rent';
 }
 
 export default function IncomeList() {
@@ -76,7 +80,7 @@ export default function IncomeList() {
       <select className="input" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
         <option value="">Tüm Türler</option>
         <option value="rent">Kira</option>
-        <option value="deposit">Depozito Mahsubu</option>
+        <option value="deposit">Depozito</option>
       </select>
 
       {/* Liste */}

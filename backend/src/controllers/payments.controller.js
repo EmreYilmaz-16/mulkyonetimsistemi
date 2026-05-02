@@ -5,6 +5,11 @@ const {
   recordOrganizationAuditEvent
 } = require('../utils/organization');
 
+const PAYMENT_TYPES = Object.freeze({
+  RENT: 'rent',
+  DEPOSIT: 'deposit'
+});
+
 const list = async (req, res, next) => {
   try {
     const organizationId = req.organizationId;
@@ -83,7 +88,7 @@ const list = async (req, res, next) => {
 const create = async (req, res, next) => {
   try {
     const organizationId = req.organizationId;
-    const { contract_id, amount, due_date, payment_date, status, method, reference_no, notes } = req.body;
+    const { contract_id, amount, due_date, payment_date, status, method, reference_no, notes, payment_type } = req.body;
 
     await ensureEntityBelongsToOrganization({
       tableName: 'contracts',
@@ -93,9 +98,10 @@ const create = async (req, res, next) => {
     });
 
     const { rows } = await query(
-      `INSERT INTO payments (organization_id, contract_id, amount, due_date, payment_date, status, method, reference_no, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      `INSERT INTO payments (organization_id, contract_id, payment_type, amount, due_date, payment_date, status, method, reference_no, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [organizationId, contract_id, amount, due_date, payment_date || null,
+       payment_type || PAYMENT_TYPES.RENT, amount, due_date, payment_date || null,
        status || 'pending', method || null, reference_no || null, notes || null]
     );
     await recordOrganizationAuditEvent({
@@ -170,14 +176,15 @@ const generateMonthly = async (req, res, next) => {
 
       const exists = await query(
         `SELECT id FROM payments WHERE contract_id = $1 AND organization_id = $2
+         AND payment_type = $4
          AND date_trunc('month', due_date) = date_trunc('month', $3::date)` ,
-        [c.id, organizationId, dueDate]
+        [c.id, organizationId, dueDate, PAYMENT_TYPES.RENT]
       );
       if (!exists.rows.length) {
         await query(
-          `INSERT INTO payments (organization_id, contract_id, amount, due_date, status)
-           VALUES ($1, $2, $3, $4, 'pending')`,
-          [organizationId, c.id, c.monthly_rent, dueDate]
+          `INSERT INTO payments (organization_id, contract_id, payment_type, amount, due_date, status)
+           VALUES ($1, $2, $3, $4, $5, 'pending')`,
+          [organizationId, c.id, PAYMENT_TYPES.RENT, c.monthly_rent, dueDate]
         );
         await recordOrganizationAuditEvent({
           organizationId,

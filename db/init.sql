@@ -123,6 +123,10 @@ CREATE TABLE contracts (
     payment_day      INTEGER NOT NULL DEFAULT 1 CHECK (payment_day BETWEEN 1 AND 28),
     status           VARCHAR(20) NOT NULL DEFAULT 'active'
                        CHECK (status IN ('active','expired','terminated')),
+    deposit_returned BOOLEAN NOT NULL DEFAULT FALSE,
+    deposit_return_date DATE,
+    deposit_return_amount NUMERIC(12,2),
+    termination_notes TEXT,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -134,6 +138,8 @@ CREATE TABLE payments (
     id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
     contract_id    UUID NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+    payment_type   VARCHAR(20) NOT NULL DEFAULT 'rent'
+                     CHECK (payment_type IN ('rent','deposit')),
     amount         NUMERIC(12,2) NOT NULL,
     due_date       DATE NOT NULL,
     payment_date   DATE,

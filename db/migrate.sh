@@ -24,7 +24,8 @@ for file in \
   /migrations/014_seed_demo_data.sql \
   /migrations/015_seed_optional_modules_demo_data.sql \
   /migrations/016_add_contract_payment_day.sql \
-  /migrations/017_refresh_demo_presentation_data.sql
+  /migrations/017_refresh_demo_presentation_data.sql \
+  /migrations/018_add_payment_type_and_deposit_flow.sql
 do
   echo "[migrate] applying $(basename "$file")"
   psql \

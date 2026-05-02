@@ -12,6 +12,8 @@ const statusColor = {
   cancelled: 'bg-gray-100 text-gray-500'
 };
 const statusLabel = { paid: 'Ödendi', pending: 'Bekliyor', late: 'Gecikti', partial: 'Eksik', cancelled: 'İptal' };
+const paymentTypeLabel = { rent: 'Kira', deposit: 'Depozito' };
+const paymentTypeColor = { rent: 'bg-emerald-100 text-emerald-700', deposit: 'bg-orange-100 text-orange-700' };
 
 const getMonthDateRange = (monthValue) => {
   if (!monthValue) return { fromDate: undefined, toDate: undefined };
@@ -146,7 +148,7 @@ export default function PaymentList() {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Kiralar</h1>
+        <h1 className="text-xl font-bold">Tahakkuklar</h1>
         <button onClick={() => { setGenResult(null); setShowGenerateModal(true); }} className="btn-primary py-2 px-3 text-sm">
           <PlusCircle size={15} /> Tahakkuk Oluştur
         </button>
@@ -251,6 +253,7 @@ export default function PaymentList() {
                 </div>
                 <div className="flex flex-col items-end gap-1.5 shrink-0">
                   <span className="font-bold text-sm">₺{Number(p.amount).toLocaleString('tr-TR')}</span>
+                  <span className={`badge ${paymentTypeColor[p.payment_type || 'rent']}`}>{paymentTypeLabel[p.payment_type || 'rent']}</span>
                   <span className={`badge ${statusColor[p.status]}`}>{statusLabel[p.status]}</span>
                   {p.status === 'pending' || p.status === 'late' ? (
                     <button

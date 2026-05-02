@@ -94,9 +94,11 @@ export default function ContractList() {
     mutationFn: ({ id, body }) => api.post(`/contracts/${id}/terminate`, body).then((r) => r.data),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['contracts'] });
+      queryClient.invalidateQueries({ queryKey: ['payments'] });
+      queryClient.invalidateQueries({ queryKey: ['expenses'] });
       setShowModal(false);
       setTerminatingContract(null);
-      if (res.damage_amount > 0) {
+      if (res.message) {
         alert(res.message);
       }
     }
@@ -239,13 +241,13 @@ export default function ContractList() {
                                 ↩ Kısmi iade — ₺{Number(detail.deposit_return_amount).toLocaleString('tr-TR')} iade edildi
                                 {detail.deposit_return_date ? ` (${new Date(detail.deposit_return_date).toLocaleDateString('tr-TR')})` : ''}
                               </p>
-                              <p className="text-xs text-red-500 font-semibold">
-                                ⚠ ₺{(Number(detail.deposit_amount) - Number(detail.deposit_return_amount)).toLocaleString('tr-TR')} hasar tazminatı gelir kaydedildi
+                              <p className="text-xs text-gray-500 font-semibold">
+                                Kalan depozito: ₺{(Number(detail.deposit_amount) - Number(detail.deposit_return_amount)).toLocaleString('tr-TR')}
                               </p>
                             </div>
                           ) : (
-                            <p className="text-xs text-red-500 font-semibold">
-                              ⚠ İade edilmedi — ₺{Number(detail.deposit_amount).toLocaleString('tr-TR')} hasar tazminatı gelir kaydedildi
+                            <p className="text-xs text-gray-500 font-semibold">
+                              İade edilmedi
                             </p>
                           )}
                         </div>
@@ -362,11 +364,11 @@ export default function ContractList() {
                       onChange={(e) => setForm({ ...form, deposit_return_amount: e.target.value })}
                     />
                     {damageVal > 0 ? (
-                      <p className="text-xs text-red-500 mt-1 font-semibold">
-                        ⚠ Hasar/eksiklik tazminatı: ₺{damageVal.toLocaleString('tr-TR')} → gelir olarak kaydedilecek
+                      <p className="text-xs text-amber-600 mt-1 font-semibold">
+                        İade edilmeyen bakiye: ₺{damageVal.toLocaleString('tr-TR')}
                       </p>
                     ) : (
-                      <p className="text-xs text-green-600 mt-1">✓ Tam iade — gelir kaydı oluşturulmayacak</p>
+                      <p className="text-xs text-green-600 mt-1">✓ Tam iade — gider kaydı oluşturulacak</p>
                     )}
                   </div>
                 )}
