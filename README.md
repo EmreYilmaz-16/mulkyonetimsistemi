@@ -83,3 +83,28 @@ cd backend && npm install && npm run dev
 # Frontend
 cd frontend && npm install && npm run dev
 ```
+
+## Tek Komut Deploy
+
+Windows'tan lokal değişiklikleri commit edip GitHub'a push etmek, ardından uzak sunucuda `pull` alıp Docker stack'i yeniden build etmek için repo kökünden şu script'i kullanın:
+
+```powershell
+.\deploy-remote.ps1 -CommitMessage "fix: aciklayici commit mesaji"
+```
+
+Alternatif olarak:
+
+```bat
+deploy-remote.bat -CommitMessage "fix: aciklayici commit mesaji"
+```
+
+Varsayılan hedefler:
+- Remote host: `pbs@192.168.99.121`
+- Remote path: `/home/pbs/docker-stack/mulkyonetimsistemi`
+- Branch: `main`
+
+Sunucuya özel `docker-compose.yml` dosyası korunur. Gerçek komutları çalıştırmadan akışı görmek için:
+
+```powershell
+.\deploy-remote.ps1 -CommitMessage "test" -DryRun
+```
