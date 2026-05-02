@@ -100,8 +100,7 @@ const create = async (req, res, next) => {
     const { rows } = await query(
       `INSERT INTO payments (organization_id, contract_id, payment_type, amount, due_date, payment_date, status, method, reference_no, notes)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [organizationId, contract_id, amount, due_date, payment_date || null,
-       payment_type || PAYMENT_TYPES.RENT, amount, due_date, payment_date || null,
+      [organizationId, contract_id, payment_type || PAYMENT_TYPES.RENT, amount, due_date, payment_date || null,
        status || 'pending', method || null, reference_no || null, notes || null]
     );
     await recordOrganizationAuditEvent({
