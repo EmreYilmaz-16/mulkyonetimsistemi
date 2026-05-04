@@ -143,7 +143,7 @@ export default function ContractList() {
           <option value="terminated">Feshedildi</option>
         </select>
         <select className="input" value={expiryFilter} onChange={(e) => setExpiryFilter(e.target.value)}>
-          <option value="">Tüm bitişler</option>
+          <option value="">Tümü</option>
           <option value="expired">Sözleşmesi bitenler</option>
           <option value="expiring_3_months">3 ay veya daha az kalanlar</option>
         </select>
